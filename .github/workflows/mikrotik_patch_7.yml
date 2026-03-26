@@ -128,7 +128,7 @@ jobs:
             LATEST_VERSION=$(wget -nv -O - https://download.mikrotik.com/routeros/NEWESTa7.${{ matrix.channel }} | cut -d ' ' -f1)
           fi
         else
-          LATEST_VERSION=$(wget -nv -O - https://${{ env.MIKRO_UPGRADE_URL }}/routeros/NEWESTa7.${{ matrix.channel }} | cut -d ' ' -f1)
+          LATEST_VERSION=$(wget -nv -O - https://download.mikrotik.com/routeros/NEWESTa7.${{ matrix.channel }} | cut -d ' ' -f1)
         fi
         echo Latest Version:$LATEST_VERSION
         if [ "${{ github.event_name }}" == "schedule" ]; then
