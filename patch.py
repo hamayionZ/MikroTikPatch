@@ -3,6 +3,7 @@ import lzma
 import struct
 import os
 import re
+import sys
 from npk import NovaPackage, NpkPartID, NpkFileContainer
 
 def replace_chunks(old_chunks, new_chunks, data, name):
@@ -38,42 +39,46 @@ def replace_key(old, new, data, name=''):
         if arch in ['arm64', 'arm']:
             old_chunks = [old[i:i+4] for i in range(0, len(old), 4)]
             new_chunks = [new[i:i+4] for i in range(0, len(new), 4)]
-            old_bytes = old_chunks[4] + old_chunks[5] + old_chunks[2] + old_chunks[0] + old_chunks[1] + old_chunks[6] + old_chunks[7]
-            new_bytes = new_chunks[4] + new_chunks[5] + new_chunks[2] + new_chunks[0] + new_chunks[1] + new_chunks[6] + new_chunks[7]
-            
-            if old_bytes in data:
-                print(f'{name} public key patched {old[:16].hex().upper()}...')
-                data = data.replace(old_bytes, new_bytes)
-                old_codes = [bytes.fromhex('793583E2'), bytes.fromhex('FD3A83E2'), bytes.fromhex('193D83E2')]
-                new_codes = [bytes.fromhex('FF34A0E3'), bytes.fromhex('753C83E2'), bytes.fromhex('FC3083E2')]
-                data = replace_chunks(old_codes, new_codes, data, name)
-            else:
-                def conver_chunks(data_bytes):
-                    ret = [
-                        (data_bytes[2] << 16) | (data_bytes[1] << 8) | data_bytes[0] | ((data_bytes[3] << 24) & 0x03000000),
-                        (data_bytes[3] >> 2) | (data_bytes[4] << 6) | (data_bytes[5] << 14) | ((data_bytes[6] << 22) & 0x1C00000),
-                        (data_bytes[6] >> 3) | (data_bytes[7] << 5) | (data_bytes[8] << 13) | ((data_bytes[9] << 21) & 0x3E00000),
-                        (data_bytes[9] >> 5) | (data_bytes[10] << 3) | (data_bytes[11] << 11) | ((data_bytes[12] << 19) & 0x1F80000),
-                        (data_bytes[12] >> 6) | (data_bytes[13] << 2) | (data_bytes[14] << 10) | (data_bytes[15] << 18),
-                        data_bytes[16] | (data_bytes[17] << 8) | (data_bytes[18] << 16) | ((data_bytes[19] << 24) & 0x01000000),
-                        (data_bytes[19] >> 1) | (data_bytes[20] << 7) | (data_bytes[21] << 15) | ((data_bytes[22] << 23) & 0x03800000),
-                        (data_bytes[22] >> 3) | (data_bytes[23] << 5) | (data_bytes[24] << 13) | ((data_bytes[25] << 21) & 0x1E00000),
-                        (data_bytes[25] >> 4) | (data_bytes[26] << 4) | (data_bytes[27] << 12) | ((data_bytes[28] << 20) & 0x3F00000),
-                        (data_bytes[28] >> 6) | (data_bytes[29] << 2) | (data_bytes[30] << 10) | (data_bytes[31] << 18)
-                    ]
-                    return [struct.pack('<I', x) for x in ret]
-                
-                old_chunks = conver_chunks(old)
-                new_chunks = conver_chunks(new)
-                old_bytes = b''.join([v for i, v in enumerate(old_chunks) if i != 8])
-                new_bytes = b''.join([v for i, v in enumerate(new_chunks) if i != 8])
+            if len(old_chunks) >= 8 and len(new_chunks) >= 8:
+                old_bytes = old_chunks[4] + old_chunks[5] + old_chunks[2] + old_chunks[0] + old_chunks[1] + old_chunks[6] + old_chunks[7]
+                new_bytes = new_chunks[4] + new_chunks[5] + new_chunks[2] + new_chunks[0] + new_chunks[1] + new_chunks[6] + new_chunks[7]
                 
                 if old_bytes in data:
                     print(f'{name} public key patched {old[:16].hex().upper()}...')
                     data = data.replace(old_bytes, new_bytes)
-                    old_codes = [bytes.fromhex('713783E2'), bytes.fromhex('223A83E2'), bytes.fromhex('8D3F83E2')]
-                    new_codes = [bytes.fromhex('973303E3'), bytes.fromhex('DD3883E3'), bytes.fromhex('033483E3')]
+                    old_codes = [bytes.fromhex('793583E2'), bytes.fromhex('FD3A83E2'), bytes.fromhex('193D83E2')]
+                    new_codes = [bytes.fromhex('FF34A0E3'), bytes.fromhex('753C83E2'), bytes.fromhex('FC3083E2')]
                     data = replace_chunks(old_codes, new_codes, data, name)
+                else:
+                    def conver_chunks(data_bytes):
+                        if len(data_bytes) < 32:
+                            return []
+                        ret = [
+                            (data_bytes[2] << 16) | (data_bytes[1] << 8) | data_bytes[0] | ((data_bytes[3] << 24) & 0x03000000),
+                            (data_bytes[3] >> 2) | (data_bytes[4] << 6) | (data_bytes[5] << 14) | ((data_bytes[6] << 22) & 0x1C00000),
+                            (data_bytes[6] >> 3) | (data_bytes[7] << 5) | (data_bytes[8] << 13) | ((data_bytes[9] << 21) & 0x3E00000),
+                            (data_bytes[9] >> 5) | (data_bytes[10] << 3) | (data_bytes[11] << 11) | ((data_bytes[12] << 19) & 0x1F80000),
+                            (data_bytes[12] >> 6) | (data_bytes[13] << 2) | (data_bytes[14] << 10) | (data_bytes[15] << 18),
+                            data_bytes[16] | (data_bytes[17] << 8) | (data_bytes[18] << 16) | ((data_bytes[19] << 24) & 0x01000000),
+                            (data_bytes[19] >> 1) | (data_bytes[20] << 7) | (data_bytes[21] << 15) | ((data_bytes[22] << 23) & 0x03800000),
+                            (data_bytes[22] >> 3) | (data_bytes[23] << 5) | (data_bytes[24] << 13) | ((data_bytes[25] << 21) & 0x1E00000),
+                            (data_bytes[25] >> 4) | (data_bytes[26] << 4) | (data_bytes[27] << 12) | ((data_bytes[28] << 20) & 0x3F00000),
+                            (data_bytes[28] >> 6) | (data_bytes[29] << 2) | (data_bytes[30] << 10) | (data_bytes[31] << 18)
+                        ]
+                        return [struct.pack('<I', x) for x in ret]
+                    
+                    old_chunks = conver_chunks(old)
+                    new_chunks = conver_chunks(new)
+                    if old_chunks and new_chunks:
+                        old_bytes = b''.join([v for i, v in enumerate(old_chunks) if i != 8])
+                        new_bytes = b''.join([v for i, v in enumerate(new_chunks) if i != 8])
+                        
+                        if old_bytes in data:
+                            print(f'{name} public key patched {old[:16].hex().upper()}...')
+                            data = data.replace(old_bytes, new_bytes)
+                            old_codes = [bytes.fromhex('713783E2'), bytes.fromhex('223A83E2'), bytes.fromhex('8D3F83E2')]
+                            new_codes = [bytes.fromhex('973303E3'), bytes.fromhex('DD3883E3'), bytes.fromhex('033483E3')]
+                            data = replace_chunks(old_codes, new_codes, data, name)
         
         return data
     except Exception as e:
@@ -86,23 +91,44 @@ def patch_bzimage(data, key_dict):
         HEADER_PAYLOAD_OFFSET = 584
         HEADER_PAYLOAD_LENGTH_OFFSET = HEADER_PAYLOAD_OFFSET + 4
         
+        if len(data) <= max(HEADER_PAYLOAD_LENGTH_OFFSET + 4, PE_TEXT_SECTION_OFFSET + 4):
+            print("Error: Data too small for PE header parsing")
+            return data
+            
         text_section_raw_data = struct.unpack_from('<I', data, PE_TEXT_SECTION_OFFSET)[0]
         payload_offset = text_section_raw_data + struct.unpack_from('<I', data, HEADER_PAYLOAD_OFFSET)[0]
         payload_length = struct.unpack_from('<I', data, HEADER_PAYLOAD_LENGTH_OFFSET)[0]
         payload_length = payload_length - 4
         
+        if payload_offset + payload_length > len(data):
+            print("Error: Payload exceeds data bounds")
+            return data
+            
         z_output_len = struct.unpack_from('<I', data, payload_offset + payload_length)[0]
         vmlinux_xz = data[payload_offset:payload_offset + payload_length]
-        vmlinux = lzma.decompress(vmlinux_xz)
+        
+        try:
+            vmlinux = lzma.decompress(vmlinux_xz)
+        except lzma.LZMAError as e:
+            print(f"Error decompressing vmlinux: {e}")
+            return data
         
         assert z_output_len == len(vmlinux), 'vmlinux size is not equal to expected'
         
         CPIO_HEADER_MAGIC = b'07070100'
         CPIO_FOOTER_MAGIC = b'TRAILER!!!\x00\x00\x00\x00'
         
-        cpio_offset1 = vmlinux.index(CPIO_HEADER_MAGIC)
+        cpio_offset1 = vmlinux.find(CPIO_HEADER_MAGIC)
+        if cpio_offset1 == -1:
+            print("Error: CPIO header not found")
+            return data
+            
         initramfs = vmlinux[cpio_offset1:]
-        cpio_offset2 = initramfs.index(CPIO_FOOTER_MAGIC) + len(CPIO_FOOTER_MAGIC)
+        cpio_offset2 = initramfs.find(CPIO_FOOTER_MAGIC) + len(CPIO_FOOTER_MAGIC)
+        if cpio_offset2 == -1:
+            print("Error: CPIO footer not found")
+            return data
+            
         initramfs = initramfs[:cpio_offset2]
         new_initramfs = initramfs
         
@@ -134,13 +160,17 @@ def patch_bzimage(data, key_dict):
         return bytes(new_data)
     except Exception as e:
         print(f"Error in patch_bzimage: {e}")
-        raise
+        return data
 
 def patch_block(dev, file, key_dict):
     try:
         BLOCK_SIZE = 4096
         result = subprocess.run(f"debugfs {dev} -R 'stat {file}' 2> /dev/null | sed -n '11p'", 
                                shell=True, capture_output=True, text=True)
+        if result.returncode != 0:
+            print(f"Error: debugfs failed with return code {result.returncode}")
+            return
+            
         blocks_info = result.stdout.strip().split(',')
         print(f'blocks_info : {blocks_info}')
         
@@ -149,12 +179,15 @@ def patch_block(dev, file, key_dict):
         
         for block_info in blocks_info:
             _tmp = block_info.strip().split(':')
+            if len(_tmp) < 2:
+                continue
             if _tmp[0].strip() == '(IND)':
                 ind_block_id = int(_tmp[1])
             else:
                 id_range = _tmp[0].strip().replace('(', '').replace(')', '').split('-')
                 block_range = _tmp[1].strip().replace('(', '').replace(')', '').split('-')
-                blocks += [id for id in range(int(block_range[0]), int(block_range[1]) + 1)]
+                if len(block_range) >= 2:
+                    blocks += [id for id in range(int(block_range[0]), int(block_range[1]) + 1)]
         
         print(f'blocks : {len(blocks)} ind_block_id : {ind_block_id}')
         
@@ -224,17 +257,28 @@ def find_7zXZ_data(data):
     try:
         offset1 = 0
         _data = data
+        last_pos = 0
         while b'\xFD7zXZ\x00\x00\x01' in _data:
-            offset1 = offset1 + _data.index(b'\xFD7zXZ\x00\x00\x01') + 8
-            _data = _data[offset1:]
-        offset1 -= 8
+            pos = _data.index(b'\xFD7zXZ\x00\x00\x01')
+            offset1 = offset1 + pos + 8
+            _data = _data[pos + 8:]
+            last_pos = offset1
+        if last_pos > 0:
+            offset1 = last_pos - 8
+        else:
+            offset1 = 0
         
         offset2 = 0
         _data = data
         while b'\x00\x00\x00\x00\x01\x59\x5A' in _data:
-            offset2 = offset2 + _data.index(b'\x00\x00\x00\x00\x01\x59\x5A') + 7
-            _data = _data[offset2:]
+            pos = _data.index(b'\x00\x00\x00\x00\x01\x59\x5A')
+            offset2 = offset2 + pos + 7
+            _data = _data[pos + 7:]
         
+        if offset1 == 0 or offset2 == 0 or offset2 <= offset1:
+            print('No valid 7zXZ data found')
+            return b''
+            
         print(f'found 7zXZ data offset:{offset1} size:{offset2 - offset1}')
         return data[offset1:offset2]
     except Exception as e:
@@ -257,8 +301,14 @@ def patch_pe(data, key_dict):
         vmlinux_xz = find_7zXZ_data(data)
         if vmlinux_xz:
             vmlinux = lzma.decompress(vmlinux_xz)
-            initrd_xz_offset = vmlinux.index(b'\xFD7zXZ\x00\x00\x01')
-            initrd_xz_size = vmlinux[initrd_xz_offset:].index(b'\x00\x00\x00\x00\x01\x59\x5A') + 7
+            initrd_xz_offset = vmlinux.find(b'\xFD7zXZ\x00\x00\x01')
+            if initrd_xz_offset == -1:
+                print("Error: initrd 7zXZ header not found")
+                return data
+            initrd_xz_size = vmlinux[initrd_xz_offset:].find(b'\x00\x00\x00\x00\x01\x59\x5A') + 7
+            if initrd_xz_size < 7:
+                print("Error: initrd size invalid")
+                return data
             initrd_xz = vmlinux[initrd_xz_offset:initrd_xz_offset + initrd_xz_size]
             new_initrd_xz = patch_initrd_xz(initrd_xz, key_dict)
             new_vmlinux = vmlinux.replace(initrd_xz, new_initrd_xz)
@@ -287,8 +337,6 @@ def patch_netinstall(key_dict, input_file, output_file=None):
         
         if netinstall[:2] == b'MZ':
             try:
-                from package import check_install_package
-                check_install_package(['pefile'])
                 import pefile
                 
                 ROUTEROS_BOOT = {
@@ -304,6 +352,11 @@ def patch_netinstall(key_dict, input_file, output_file=None):
                 }
                 
                 pe = pefile.PE(input_file)
+                if not hasattr(pe, 'DIRECTORY_ENTRY_RESOURCE'):
+                    print("No resources found in PE file")
+                    pe.close()
+                    return
+                    
                 for resource in pe.DIRECTORY_ENTRY_RESOURCE.entries:
                     if resource.id == pefile.RESOURCE_TYPE["RT_RCDATA"]:
                         for sub_resource in resource.directory.entries:
@@ -313,6 +366,9 @@ def patch_netinstall(key_dict, input_file, output_file=None):
                                 rva = sub_resource.directory.entries[0].data.struct.OffsetToData
                                 size = sub_resource.directory.entries[0].data.struct.Size
                                 data = pe.get_data(rva, size)
+                                if len(data) < 4:
+                                    print(f"Data too small for {bootloader['arch']}")
+                                    continue
                                 _size = struct.unpack('<I', data[:4])[0]
                                 _data = data[4:4 + _size]
                                 
@@ -333,14 +389,16 @@ def patch_netinstall(key_dict, input_file, output_file=None):
                                 pe.set_bytes_at_rva(rva, new_data)
                 
                 pe.write(output_file or input_file)
+                pe.close()
                 
+            except ImportError:
+                print("pefile module not installed. Install with: pip install pefile")
             except Exception as e:
                 print(f"Error patching PE netinstall: {e}")
                 import traceback
                 traceback.print_exc()
         
         elif netinstall[:4] == b'\x7FELF':
-            # ELF patching code - simplified
             print("ELF netinstall detected but patching is complex")
             # Keep original for now
             pass
@@ -355,6 +413,10 @@ def patch_netinstall(key_dict, input_file, output_file=None):
 
 def patch_kernel(data, key_dict):
     try:
+        if len(data) < 4:
+            print(f'Data too small: {len(data)} bytes')
+            return data
+            
         if data[:2] == b'MZ':
             print('patching EFI Kernel')
             if len(data) > 60 and data[56:60] == b'ARM\x64':
@@ -378,15 +440,17 @@ def patch_kernel(data, key_dict):
 
 def patch_loader(loader_file):
     try:
-        from package import check_install_package
-        check_install_package(['pyelftools'])
-        from loader.patch_loader import patch_loader as do_patch_loader
-        arch = os.getenv('ARCH') or 'x86'
-        arch = arch.replace('-', '')
-        do_patch_loader(loader_file, loader_file, arch)
+        # Check if loader patch module exists
+        if os.path.exists('loader/patch_loader.py'):
+            sys.path.insert(0, os.path.dirname(os.path.abspath('loader')))
+            from patch_loader import patch_loader as do_patch_loader
+            arch = os.getenv('ARCH') or 'x86'
+            arch = arch.replace('-', '')
+            do_patch_loader(loader_file, loader_file, arch)
+        else:
+            print("loader/patch_loader.py not found. Skipping loader patch.")
     except ImportError as e:
-        print(e)
-        print("loader module import failed. cannot run patch_loader.py")
+        print(f"Loader module import failed: {e}")
     except Exception as e:
         print(f"Error in patch_loader: {e}")
 
@@ -409,8 +473,12 @@ def patch_squashfs(path, key_dict):
                             f.write(data)
                         continue
                     
-                    with open(file, 'rb') as f:
-                        data = f.read()
+                    try:
+                        with open(file, 'rb') as f:
+                            data = f.read()
+                    except Exception as e:
+                        print(f"Error reading {file}: {e}")
+                        continue
                     
                     modified = False
                     for old_public_key, new_public_key in key_dict.items():
@@ -433,8 +501,11 @@ def patch_squashfs(path, key_dict):
                             modified = True
                     
                     if modified:
-                        with open(file, 'wb') as f:
-                            f.write(data)
+                        try:
+                            with open(file, 'wb') as f:
+                                f.write(data)
+                        except Exception as e:
+                            print(f"Error writing {file}: {e}")
                     
                     if os.path.split(file)[1] == 'licupgr':
                         url_dict = {
@@ -444,14 +515,17 @@ def patch_squashfs(path, key_dict):
                             if old_url and new_url and old_url in data:
                                 print(f'{file} url patched {old_url.decode()[:7]}...')
                                 data = data.replace(old_url, new_url)
-                                with open(file, 'wb') as f:
-                                    f.write(data)
+                                try:
+                                    with open(file, 'wb') as f:
+                                        f.write(data)
+                                except Exception as e:
+                                    print(f"Error writing {file}: {e}")
     except Exception as e:
         print(f"Error in patch_squashfs: {e}")
 
 def run_shell_command(command):
     try:
-        process = subprocess.run(command, shell=True, check=True, capture_output=True)
+        process = subprocess.run(command, shell=True, check=True, capture_output=True, text=True)
         return process.stdout, process.stderr
     except subprocess.CalledProcessError as e:
         print(f"Command failed: {command}")
@@ -589,4 +663,4 @@ if __name__ == '__main__':
         print(f"Fatal error: {e}")
         import traceback
         traceback.print_exc()
-        exit(1)
+        sys.exit(1)
