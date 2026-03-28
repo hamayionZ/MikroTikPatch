@@ -142,157 +142,135 @@ jobs:
         echo "Latest Version: $LATEST_VERSION"
         echo "Architecture: ${{ matrix.arch }}"
 
-    - name: Download and patch ISO (x86/arm64)
-      if: (matrix.arch == 'x86' || matrix.arch == 'arm64') && steps.get_latest.outputs.has_new_version == 'true'
-      run: |
-        set -e
-        # Download ISO
-        wget -nv -O mikrotik.iso https://download.mikrotik.com/routeros/$LATEST_VERSION/mikrotik-$LATEST_VERSION$ARCH.iso || \
-        wget -nv -O mikrotik.iso https://download.mikrotik.com/routeros/$LATEST_VERSION/mikrotik-$LATEST_VERSION.iso
+ - name: Download and patch ISO (x86/arm64)
+   if: (matrix.arch == 'x86' || matrix.arch == 'arm64') && steps.get_latest.outputs.has_new_version == 'true'
+  run: |
+    set -e
+    # Download ISO
+    wget -nv -O mikrotik.iso https://download.mikrotik.com/routeros/$LATEST_VERSION/mikrotik-$LATEST_VERSION$ARCH.iso || \
+    wget -nv -O mikrotik.iso https://download.mikrotik.com/routeros/$LATEST_VERSION/mikrotik-$LATEST_VERSION.iso
 
-        # Extract ISO with proper permissions
-        mkdir -p iso new_iso
-        sudo mount -o loop,ro mikrotik.iso ./iso
-        sudo rsync -a ./iso/ ./new_iso/
-        sudo chmod -R u+rw ./new_iso
-        sudo umount ./iso
+    # Extract ISO
+    mkdir -p iso new_iso
+    sudo mount -o loop,ro mikrotik.iso ./iso
+    sudo rsync -a ./iso/ ./new_iso/
+    sudo chmod -R u+rw ./new_iso
+    sudo umount ./iso
 
-        # Find and patch main NPK
-        if [ -f ./new_iso/routeros-$LATEST_VERSION$ARCH.npk ]; then
-          sudo cp ./new_iso/routeros-$LATEST_VERSION$ARCH.npk ./
-          sudo chown $USER:$USER routeros-$LATEST_VERSION$ARCH.npk
-          python3 patch.py npk routeros-$LATEST_VERSION$ARCH.npk || echo "Patching main NPK failed, continuing"
-          sudo cp -f routeros-$LATEST_VERSION$ARCH.npk ./new_iso/
-          sudo chmod 644 ./new_iso/routeros-$LATEST_VERSION$ARCH.npk
+    # Patch main NPK
+    if [ -f ./new_iso/routeros-$LATEST_VERSION$ARCH.npk ]; then
+      sudo cp ./new_iso/routeros-$LATEST_VERSION$ARCH.npk ./
+      sudo chown $USER:$USER routeros-$LATEST_VERSION$ARCH.npk
+      python3 patch.py npk routeros-$LATEST_VERSION$ARCH.npk || true
+      sudo cp -f routeros-$LATEST_VERSION$ARCH.npk ./new_iso/
+      sudo chmod 644 ./new_iso/routeros-$LATEST_VERSION$ARCH.npk
+    fi
+
+    # Download all packages if needed
+    NPK_FILES=$(find ./new_iso -name "*.npk" | wc -l)
+    if [ $NPK_FILES -eq 0 ]; then
+      wget -nv -O all_packages.zip https://download.mikrotik.com/routeros/$LATEST_VERSION/all_packages-${{ matrix.arch }}-$LATEST_VERSION.zip || true
+      if [ -f all_packages.zip ]; then
+        unzip -o all_packages.zip -d ./new_iso
+        sudo chmod -R 644 ./new_iso/*.npk 2>/dev/null || true
+        rm all_packages.zip
+      fi
+    fi
+
+    # Add optional packages (option.sfs, python3.sfs)
+    for sfs_file in option.sfs python3.sfs; do
+      if [ -f "$sfs_file" ]; then
+        pkg_name=$(basename "$sfs_file" .sfs)
+        BASE_NPK=$(find ./new_iso -name "*.npk" | head -1)
+        if [ -n "$BASE_NPK" ] && [ -f npk.py ]; then
+          cp "$BASE_NPK" ./base.npk
+          python3 npk.py create ./base.npk "./new_iso/${pkg_name}-${LATEST_VERSION}${ARCH}.npk" "$pkg_name" "$sfs_file" -desc="Custom $pkg_name" || true
         fi
+      fi
+    done
 
-        # Download all packages if needed
-        NPK_FILES=$(find ./new_iso -name "*.npk" | wc -l)
-        if [ $NPK_FILES -eq 0 ]; then
-          wget -nv -O all_packages.zip https://download.mikrotik.com/routeros/$LATEST_VERSION/all_packages-${{ matrix.arch }}-$LATEST_VERSION.zip || true
-          if [ -f all_packages.zip ]; then
-            unzip -o all_packages.zip -d ./new_iso
-            sudo chmod -R 644 ./new_iso/*.npk 2>/dev/null || true
-            rm all_packages.zip
-          fi
+    # Sign all NPK files (skip if keys missing)
+    for file in $(find ./new_iso -name "*.npk"); do
+      if [ -f npk.py ]; then
+        temp_file="/tmp/$(basename $file)"
+        sudo cp "$file" "$temp_file"
+        sudo chown $USER:$USER "$temp_file"
+        python3 npk.py sign "$temp_file" "$temp_file" || true
+        sudo cp "$temp_file" "$file"
+        sudo chmod 644 "$file"
+        rm -f "$temp_file"
+      fi
+    done
+
+    # Patch kernel inside efiboot.img and isolinux
+    if [ -f ./new_iso/efiboot.img ]; then
+      mkdir -p efiboot
+      sudo mount -o loop ./new_iso/efiboot.img ./efiboot
+      sudo chmod -R u+rw ./efiboot 2>/dev/null || true
+
+      if [ "${{ matrix.arch }}" == "x86" ]; then
+        # Patch EFI kernel
+        if [ -f ./efiboot/EFI/BOOT/BOOTX64.EFI ]; then
+          sudo cp ./efiboot/EFI/BOOT/BOOTX64.EFI ./BOOTX64.EFI
+          sudo chown $USER:$USER ./BOOTX64.EFI
+          python3 patch.py kernel ./BOOTX64.EFI
+          sudo cp ./BOOTX64.EFI ./efiboot/EFI/BOOT/BOOTX64.EFI
         fi
-
-        # Create optional packages if SFS files exist
-        echo "Checking for optional SFS packages..."
-        for sfs_file in option.sfs python3.sfs; do
-          if [ -f "$sfs_file" ]; then
-            pkg_name=$(basename "$sfs_file" .sfs)
-            echo "Creating $pkg_name package from $sfs_file"
-            # Find a base NPK to use as template
-            BASE_NPK=$(find ./new_iso -name "*.npk" | head -1)
-            if [ -n "$BASE_NPK" ] && [ -f npk.py ]; then
-              # Copy base NPK to temp location
-              cp "$BASE_NPK" ./base.npk
-              # Create new NPK
-              python3 npk.py create ./base.npk "./new_iso/${pkg_name}-${LATEST_VERSION}${ARCH}.npk" "$pkg_name" "$sfs_file" -desc="Custom $pkg_name package"
-              echo "Created $pkg_name package"
-            else
-              echo "No base NPK found, skipping $pkg_name package"
-            fi
-          else
-            echo "$sfs_file not found, skipping"
-          fi
-        done
-
-        # Also add any custom SFS from ./packages/ directory
-        if [ -d "./packages" ]; then
-          echo "Found ./packages directory, adding custom packages..."
-          for sfs_file in ./packages/*.sfs; do
-            if [ -f "$sfs_file" ]; then
-              pkg_name=$(basename "$sfs_file" .sfs)
-              echo "Creating custom package $pkg_name from $sfs_file"
-              BASE_NPK=$(find ./new_iso -name "*.npk" | head -1)
-              if [ -n "$BASE_NPK" ] && [ -f npk.py ]; then
-                cp "$BASE_NPK" ./base.npk
-                python3 npk.py create ./base.npk "./new_iso/${pkg_name}-${LATEST_VERSION}${ARCH}.npk" "$pkg_name" "$sfs_file" -desc="Custom $pkg_name"
-                echo "Created custom $pkg_name package"
-              fi
-            fi
-          done
+        # Patch legacy BIOS kernel
+        if [ -f ./new_iso/isolinux/linux ]; then
+          sudo cp ./new_iso/isolinux/linux ./linux
+          sudo chown $USER:$USER ./linux
+          python3 patch.py kernel ./linux
+          sudo cp ./linux ./new_iso/isolinux/linux
         fi
-
-        # Sign all NPK files (skip if keys are missing)
-        echo "Signing NPK files..."
-        for file in $(find ./new_iso -name "*.npk"); do
-          if [ -f npk.py ]; then
-            echo "Signing $file"
-            # Copy to temp to avoid permission issues
-            temp_file="/tmp/$(basename $file)"
-            sudo cp "$file" "$temp_file"
-            sudo chown $USER:$USER "$temp_file"
-            # Attempt signing, ignore errors
-            python3 npk.py sign "$temp_file" "$temp_file" || echo "Signing failed for $file"
-            # Copy back and fix permissions
-            sudo cp "$temp_file" "$file"
-            sudo chmod 644 "$file"
-            rm -f "$temp_file"
-          fi
-        done
-
-        # Create all_packages zip
-        mkdir -p all_packages
-        sudo cp ./new_iso/*.npk ./all_packages/ 2>/dev/null || true
-        sudo chown -R $USER:$USER ./all_packages
-        cd ./all_packages
-        zip -r ../all_packages-${{ matrix.arch }}-$LATEST_VERSION.zip *.npk 2>/dev/null || true
-        cd ..
-
-        # Patch kernel and create final ISO
-        if [ -f ./new_iso/efiboot.img ]; then
-          mkdir -p efiboot
-          sudo mount -o loop ./new_iso/efiboot.img ./efiboot || true
-
-          # Fix permissions for mounted files (if possible)
-          sudo chmod -R u+rw ./efiboot 2>/dev/null || true
-
-          if [ "${{ matrix.arch }}" == "x86" ]; then
-            if [ -f ./efiboot/linux.x86_64 ]; then
-              sudo cp ./efiboot/linux.x86_64 ./linux.x86_64
-              sudo chown $USER:$USER ./linux.x86_64
-              python3 patch.py kernel ./linux.x86_64
-              sudo cp ./linux.x86_64 ./efiboot/linux.x86_64
-              sudo cp ./linux.x86_64 ./BOOTX64.EFI
-              sudo cp ./BOOTX64.EFI ./new_iso/isolinux/linux
-              sudo chmod 644 ./new_iso/isolinux/linux
-            fi
-            sudo umount ./efiboot 2>/dev/null || true
-            mkisofs -o mikrotik-$LATEST_VERSION$ARCH.iso \
-                    -V "MikroTik $LATEST_VERSION ${{ matrix.arch }}" \
-                    -b isolinux/isolinux.bin \
-                    -c isolinux/boot.cat \
-                    -no-emul-boot \
-                    -boot-load-size 4 \
-                    -boot-info-table \
-                    -eltorito-alt-boot \
-                    -e efiboot.img \
-                    -no-emul-boot \
-                    -R -J \
-                    ./new_iso || echo "ISO creation failed, but continuing"
-          elif [ "${{ matrix.arch }}" == "arm64" ]; then
-            if [ -f ./efiboot/EFI/BOOT/BOOTAA64.EFI ]; then
-              sudo cp ./efiboot/EFI/BOOT/BOOTAA64.EFI ./BOOTAA64.EFI
-              sudo chown $USER:$USER ./BOOTAA64.EFI
-              python3 patch.py kernel ./BOOTAA64.EFI
-              sudo cp ./BOOTAA64.EFI ./efiboot/EFI/BOOT/BOOTAA64.EFI
-            fi
-            sudo umount ./efiboot 2>/dev/null || true
-            xorriso -as mkisofs -o mikrotik-$LATEST_VERSION$ARCH.iso \
-                    -V "MikroTik $LATEST_VERSION ${{ matrix.arch }}" \
-                    -b efiboot.img \
-                    -no-emul-boot \
-                    -R -J \
-                    ./new_iso || echo "ISO creation failed, but continuing"
-          fi
+      elif [ "${{ matrix.arch }}" == "arm64" ]; then
+        if [ -f ./efiboot/EFI/BOOT/BOOTAA64.EFI ]; then
+          sudo cp ./efiboot/EFI/BOOT/BOOTAA64.EFI ./BOOTAA64.EFI
+          sudo chown $USER:$USER ./BOOTAA64.EFI
+          python3 patch.py kernel ./BOOTAA64.EFI
+          sudo cp ./BOOTAA64.EFI ./efiboot/EFI/BOOT/BOOTAA64.EFI
         fi
+      fi
 
-        # Cleanup
-        sudo rm -rf ./efiboot ./new_iso
-        echo "ISO patched: mikrotik-$LATEST_VERSION$ARCH.iso"
+      sudo umount ./efiboot
+    fi
+
+    # Create final ISO with xorriso (works for both architectures)
+    # For x86: include BIOS boot via isolinux, EFI via efiboot.img
+    # For arm64: only EFI boot
+    if [ "${{ matrix.arch }}" == "x86" ]; then
+      xorriso -as mkisofs -o mikrotik-$LATEST_VERSION$ARCH.iso \
+              -V "MikroTik $LATEST_VERSION ${{ matrix.arch }}" \
+              -b isolinux/isolinux.bin \
+              -c isolinux/boot.cat \
+              -no-emul-boot \
+              -boot-load-size 4 \
+              -boot-info-table \
+              -eltorito-alt-boot \
+              -e efiboot.img \
+              -no-emul-boot \
+              -R -J \
+              ./new_iso
+    else
+      xorriso -as mkisofs -o mikrotik-$LATEST_VERSION$ARCH.iso \
+              -V "MikroTik $LATEST_VERSION ${{ matrix.arch }}" \
+              -b efiboot.img \
+              -no-emul-boot \
+              -R -J \
+              ./new_iso
+    fi
+
+    # Verify ISO is bootable
+    if [ -f mikrotik-$LATEST_VERSION$ARCH.iso ]; then
+      echo "ISO size: $(stat -c %s mikrotik-$LATEST_VERSION$ARCH.iso) bytes"
+      xorriso -report_el_torito mikrotik-$LATEST_VERSION$ARCH.iso || true
+    else
+      echo "ERROR: ISO file not created!"
+      exit 1
+    fi
+
+    # Clean up
+    sudo rm -rf ./efiboot ./new_iso
 
     - name: Process ARM packages
       if: matrix.arch == 'arm' && steps.get_latest.outputs.has_new_version == 'true'
