@@ -1,106 +1,29 @@
-name: Patch Mikrotik RouterOS 7.x
+name: Patch Mikrotik RouterOS 7.x (x86 Only)
 on:
   schedule:
-    - cron: "0 0 * * *"
+    - cron: "0 0 * * *"  # Daily at midnight
   workflow_dispatch:
     inputs:
-      arch:
-        description: 'Architecture (x86, arm64, arm)'
-        required: true
-        default: 'x86'
-        type: choice
-        options:
-          - x86
-          - arm64
-          - arm
-      channel:
-        description: 'Channel (stable, testing)'
-        required: true
-        default: 'stable'
-        type: choice
-        options:
-          - stable
-          - long-term
-          - testing
       version:
         description: "Specify version (e.g., 7.19.2), empty for latest"
         required: false
         default: ''
         type: string
-      buildtime:
-        description: "Custom build time, leave empty for now"
-        required: false
-        default: ''
-        type: string
       release:
-        description: "Release to GitHub & Upload "
+        description: "Release to GitHub"
         required: false
-        default: false
+        default: true
         type: boolean
 
 permissions:
   contents: write
 
 env:
-  CUSTOM_LICENSE_PRIVATE_KEY: ${{ secrets.CUSTOM_LICENSE_PRIVATE_KEY }}
-  CUSTOM_LICENSE_PUBLIC_KEY: ${{ secrets.CUSTOM_LICENSE_PUBLIC_KEY }}
-  CUSTOM_NPK_SIGN_PRIVATE_KEY: ${{ secrets.CUSTOM_NPK_SIGN_PRIVATE_KEY }}
-  CUSTOM_NPK_SIGN_PUBLIC_KEY: ${{ secrets.CUSTOM_NPK_SIGN_PUBLIC_KEY }}
-  CUSTOM_CLOUD_PUBLIC_KEY: ${{ secrets.CUSTOM_CLOUD_PUBLIC_KEY }}
-  MIKRO_LICENSE_PUBLIC_KEY: ${{ secrets.MIKRO_LICENSE_PUBLIC_KEY }}
-  MIKRO_NPK_SIGN_PUBLIC_KEY: ${{ secrets.MIKRO_NPK_SIGN_PUBLIC_KEY }}
-  MIKRO_CLOUD_PUBLIC_KEY: ${{ secrets.MIKRO_CLOUD_PUBLIC_KEY }}
-  MIKRO_LICENCE_URL: ${{ secrets.MIKRO_LICENCE_URL || 'download.mikrotik.com' }}
-  CUSTOM_LICENCE_URL: ${{ secrets.CUSTOM_LICENCE_URL || 'download.mikrotik.com' }}
   MIKRO_UPGRADE_URL: ${{ secrets.MIKRO_UPGRADE_URL || 'download.mikrotik.com' }}
-  CUSTOM_UPGRADE_URL: ${{ secrets.CUSTOM_UPGRADE_URL || 'download.mikrotik.com' }}
-  MIKRO_RENEW_URL: ${{ secrets.MIKRO_RENEW_URL || 'download.mikrotik.com' }}
-  CUSTOM_RENEW_URL: ${{ secrets.CUSTOM_RENEW_URL || 'download.mikrotik.com' }}
-  MIKRO_CLOUD_URL: ${{ secrets.MIKRO_CLOUD_URL || 'download.mikrotik.com' }}
-  CUSTOM_CLOUD_URL: ${{ secrets.CUSTOM_CLOUD_URL || 'download.mikrotik.com' }}
 
 jobs:
-  Set_Variables:
+  Patch_x86_ISO:
     runs-on: ubuntu-22.04
-    outputs:
-      BUILD_TIME: ${{ steps.set_vars.outputs.BUILD_TIME }}
-      RELEASE: ${{ steps.set_vars.outputs.RELEASE }}
-      MATRIX_JSON: ${{ steps.set_vars.outputs.MATRIX_JSON }}
-    steps:
-      - name: Set variables
-        id: set_vars
-        run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            BUILD_TIME="${{ github.event.inputs.buildtime }}"
-            RELEASE="${{ github.event.inputs.release }}"
-            if [ -z "$BUILD_TIME" ]; then
-              BUILD_TIME=$(date +'%s')
-            fi
-            if [ -z "$RELEASE" ]; then
-              RELEASE=false
-            fi
-            ARCH="${{ github.event.inputs.arch }}"
-            CHANNEL="${{ github.event.inputs.channel }}"
-            MATRIX_JSON=$(jq -nc --arg arch "$ARCH" --arg channel "$CHANNEL" '[{arch: $arch, channel: $channel}]')
-          else
-            BUILD_TIME=$(date +'%s')
-            RELEASE=true
-            MATRIX_JSON='[{"arch":"x86","channel":"stable"},{"arch":"arm64","channel":"stable"},{"arch":"x86","channel":"long-term"},{"arch":"arm64","channel":"long-term"},{"arch":"x86","channel":"testing"},{"arch":"arm64","channel":"testing"}]'
-          fi
-          echo "BUILD_TIME=$BUILD_TIME" >> $GITHUB_OUTPUT
-          echo "RELEASE=$RELEASE" >> $GITHUB_OUTPUT
-          echo "MATRIX_JSON=$MATRIX_JSON" >> $GITHUB_OUTPUT
-
-  Patch_RouterOS:
-    needs: Set_Variables
-    runs-on: ubuntu-22.04
-    strategy:
-      matrix: 
-        include: ${{ fromJSON(needs.Set_Variables.outputs.MATRIX_JSON) }}
-    env:
-      TZ: 'Asia/Shanghai'
-      BUILD_TIME: ${{ needs.Set_Variables.outputs.BUILD_TIME }}
-      RELEASE: ${{ needs.Set_Variables.outputs.RELEASE }}
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
@@ -110,210 +33,203 @@ jobs:
       with:
         python-version: '3.11'
 
-    - name: Install required packages
+    - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y wget p7zip-full mkisofs xorriso qemu-utils lftp sshpass extlinux
+        sudo apt-get install -y wget mkisofs xorriso p7zip-full rsync
 
-    - name: Get latest routeros version
-      id: get_latest
+    - name: Get latest RouterOS version
+      id: get_version
       run: |
-        if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-          if [ -n "${{ github.event.inputs.version }}" ]; then
-            LATEST_VERSION="${{ github.event.inputs.version }}"
-          else
-            LATEST_VERSION=$(wget -q -O - https://${{ env.MIKRO_UPGRADE_URL }}/routeros/NEWESTa7.${{ matrix.channel }} | cut -d ' ' -f1)
-          fi
+        if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ github.event.inputs.version }}" ]]; then
+          LATEST_VERSION="${{ github.event.inputs.version }}"
         else
-          LATEST_VERSION=$(wget -q -O - https://${{ env.MIKRO_UPGRADE_URL }}/routeros/NEWESTa7.${{ matrix.channel }} | cut -d ' ' -f1)
+          LATEST_VERSION=$(wget -q -O - https://${{ env.MIKRO_UPGRADE_URL }}/routeros/NEWESTa7.stable | cut -d ' ' -f1)
         fi
         echo "LATEST_VERSION=${LATEST_VERSION}" >> $GITHUB_ENV
-        echo "has_new_version=true" >> $GITHUB_OUTPUT
-        
-        # Download CHANGELOG
-        wget -q -O CHANGELOG https://${{ env.MIKRO_UPGRADE_URL }}/routeros/$LATEST_VERSION/CHANGELOG
-        
-        # Set architecture suffix
-        if [[ "${{ matrix.arch }}" == "arm64" ]]; then
-          echo "ARCH=-arm64" >> $GITHUB_ENV
-        elif [[ "${{ matrix.arch }}" == "arm" ]]; then
-          echo "ARCH=-arm" >> $GITHUB_ENV
-        else
-          echo "ARCH=" >> $GITHUB_ENV
-        fi
-        
-        echo "Latest Version: $LATEST_VERSION"
-        echo "Architecture: ${{ matrix.arch }}"
+        echo "version=${LATEST_VERSION}" >> $GITHUB_OUTPUT
+        echo "Building RouterOS version: ${LATEST_VERSION}"
 
-    - name: Download and patch ISO (x86/arm64)
-      if: (matrix.arch == 'x86' || matrix.arch == 'arm64') && steps.get_latest.outputs.has_new_version == 'true'
+    - name: Download original ISO
       run: |
-        # Download ISO
-        wget -nv -O mikrotik.iso https://download.mikrotik.com/routeros/$LATEST_VERSION/mikrotik-$LATEST_VERSION$ARCH.iso
+        echo "Downloading mikrotik-${{ env.LATEST_VERSION }}.iso"
+        wget -nv -O mikrotik.iso https://download.mikrotik.com/routeros/${{ env.LATEST_VERSION }}/mikrotik-${{ env.LATEST_VERSION }}.iso
         
-        # Extract ISO
+        if [ ! -f mikrotik.iso ]; then
+          echo "ERROR: Failed to download ISO"
+          exit 1
+        fi
+        echo "ISO downloaded successfully"
+
+    - name: Extract ISO
+      run: |
         mkdir -p iso new_iso
         sudo mount -o loop,ro mikrotik.iso ./iso
         sudo rsync -a ./iso/ ./new_iso/
         sudo umount ./iso
-        
-        # Find and patch main NPK
-        if [ -f ./new_iso/routeros-$LATEST_VERSION$ARCH.npk ]; then
-          cp ./new_iso/routeros-$LATEST_VERSION$ARCH.npk ./
-          python3 patch.py npk routeros-$LATEST_VERSION$ARCH.npk
-          cp -f routeros-$LATEST_VERSION$ARCH.npk ./new_iso/
+        echo "ISO extracted successfully"
+
+    - name: Patch main RouterOS package
+      run: |
+        if [ -f ./new_iso/routeros-${{ env.LATEST_VERSION }}.npk ]; then
+          echo "Found main package: routeros-${{ env.LATEST_VERSION }}.npk"
+          cp ./new_iso/routeros-${{ env.LATEST_VERSION }}.npk ./
+          python3 patch.py npk routeros-${{ env.LATEST_VERSION }}.npk
+          cp -f routeros-${{ env.LATEST_VERSION }}.npk ./new_iso/
+          echo "Main package patched successfully"
+        else
+          echo "WARNING: Main package not found in ISO"
         fi
+
+    - name: Download and patch all packages
+      run: |
+        # Download all packages zip
+        wget -nv -O all_packages.zip https://download.mikrotik.com/routeros/${{ env.LATEST_VERSION }}/all_packages-x86-${{ env.LATEST_VERSION }}.zip
         
-        # Download all packages if needed
-        NPK_FILES=$(find ./new_iso -name "*.npk" | wc -l)
-        if [ $NPK_FILES -eq 0 ]; then
-          wget -nv -O all_packages.zip https://download.mikrotik.com/routeros/$LATEST_VERSION/all_packages-${{ matrix.arch }}-$LATEST_VERSION.zip
+        if [ -f all_packages.zip ]; then
           unzip -o all_packages.zip -d ./new_iso
           rm all_packages.zip
+          echo "All packages downloaded and extracted"
         fi
         
         # Sign all NPK files
+        echo "Signing all NPK packages..."
         for file in $(find ./new_iso -name "*.npk"); do
+          echo "Signing: $file"
           python3 npk.py sign "$file" "$file"
         done
-        
-        # Create option package if option.sfs exists
-        if [ -f option.sfs ]; then
-          python3 npk.py create ./new_iso/gps-$LATEST_VERSION$ARCH.npk ./new_iso/option-$LATEST_VERSION$ARCH.npk option ./option.sfs -desc="busybox"
-        fi
-        
-        # Create python3 package if python3.sfs exists
-        if [ -f python3.sfs ]; then
-          python3 npk.py create ./new_iso/gps-$LATEST_VERSION$ARCH.npk ./new_iso/python3-$LATEST_VERSION$ARCH.npk python3 ./python3.sfs -desc="python 3.11.13"
-        fi
         
         # Create all_packages zip
         mkdir -p all_packages
         cp ./new_iso/*.npk ./all_packages/
         cd ./all_packages
-        zip -r ../all_packages-${{ matrix.arch }}-$LATEST_VERSION.zip *.npk
+        zip -r ../all_packages-x86-${{ env.LATEST_VERSION }}.zip *.npk
         cd ..
-        
-        # Patch kernel and create final ISO
+        echo "All packages signed and zipped"
+
+    - name: Create option package (if option.sfs exists)
+      run: |
+        if [ -f option.sfs ]; then
+          echo "Creating option package..."
+          python3 npk.py create ./new_iso/gps-${{ env.LATEST_VERSION }}.npk ./new_iso/option-${{ env.LATEST_VERSION }}.npk option ./option.sfs -desc="busybox"
+          echo "Option package created"
+        fi
+
+    - name: Create python3 package (if python3.sfs exists)
+      run: |
+        if [ -f python3.sfs ]; then
+          echo "Creating python3 package..."
+          python3 npk.py create ./new_iso/gps-${{ env.LATEST_VERSION }}.npk ./new_iso/python3-${{ env.LATEST_VERSION }}.npk python3 ./python3.sfs -desc="python 3.11"
+          echo "Python3 package created"
+        fi
+
+    - name: Patch kernel and create final ISO
+      run: |
+        # Setup efiboot
         mkdir -p efiboot
         sudo mount -o loop ./new_iso/efiboot.img ./efiboot
         
-        if [ "${{ matrix.arch }}" == "x86" ]; then
+        # Patch kernel
+        if [ -f ./efiboot/linux.x86_64 ]; then
+          echo "Patching kernel..."
           python3 patch.py kernel ./efiboot/linux.x86_64
           cp ./efiboot/linux.x86_64 ./BOOTX64.EFI
           cp ./BOOTX64.EFI ./new_iso/isolinux/linux
-          sudo umount ./efiboot
-          mkisofs -o mikrotik-$LATEST_VERSION$ARCH.iso \
-                  -V "MikroTik $LATEST_VERSION ${{ matrix.arch }}" \
-                  -b isolinux/isolinux.bin \
-                  -c isolinux/boot.cat \
-                  -no-emul-boot \
-                  -boot-load-size 4 \
-                  -boot-info-table \
-                  -eltorito-alt-boot \
-                  -e efiboot.img \
-                  -no-emul-boot \
-                  -R -J \
-                  ./new_iso
-        elif [ "${{ matrix.arch }}" == "arm64" ]; then
-          python3 patch.py kernel ./efiboot/EFI/BOOT/BOOTAA64.EFI
-          sudo umount ./efiboot
-          xorriso -as mkisofs -o mikrotik-$LATEST_VERSION$ARCH.iso \
-                  -V "MikroTik $LATEST_VERSION ${{ matrix.arch }}" \
-                  -b efiboot.img \
-                  -no-emul-boot \
-                  -R -J \
-                  ./new_iso
+          echo "Kernel patched successfully"
+        else
+          echo "ERROR: Kernel not found"
+          exit 1
         fi
         
-        rm -rf ./efiboot ./new_iso
+        sudo umount ./efiboot
         
-        echo "ISO patched successfully: mikrotik-$LATEST_VERSION$ARCH.iso"
-
-    - name: Download and patch CHR (x86/arm64)
-      if: (matrix.arch == 'x86' || matrix.arch == 'arm64') && steps.get_latest.outputs.has_new_version == 'true'
-      run: |
-        # Download CHR image
-        wget -nv -O chr.img.zip https://download.mikrotik.com/routeros/$LATEST_VERSION/chr-$LATEST_VERSION$ARCH.img.zip
-        unzip chr.img.zip
-        rm chr.img.zip
-        mv chr-$LATEST_VERSION$ARCH.img chr.img
+        # Create final ISO
+        echo "Creating final ISO..."
+        mkisofs -o mikrotik-${{ env.LATEST_VERSION }}.iso \
+                -V "MikroTik ${{ env.LATEST_VERSION }} x86" \
+                -b isolinux/isolinux.bin \
+                -c isolinux/boot.cat \
+                -no-emul-boot \
+                -boot-load-size 4 \
+                -boot-info-table \
+                -eltorito-alt-boot \
+                -e efiboot.img \
+                -no-emul-boot \
+                -R -J \
+                ./new_iso
         
-        echo "CHR image downloaded, patching..."
-        # CHR patching code here (keep your existing CHR patching logic)
-        
-    - name: Process ARM packages
-      if: matrix.arch == 'arm' && steps.get_latest.outputs.has_new_version == 'true'
-      run: |
-        # Download all packages for ARM
-        wget -nv -O all_packages.zip https://download.mikrotik.com/routeros/$LATEST_VERSION/all_packages-arm-$LATEST_VERSION.zip
-        wget -nv -O routeros.npk https://download.mikrotik.com/routeros/$LATEST_VERSION/routeros-$LATEST_VERSION-arm.npk
-        
-        unzip all_packages.zip -d ./all_packages
-        cp routeros.npk routeros-$LATEST_VERSION-arm.npk
-        
-        # Patch main package
-        python3 patch.py npk routeros-$LATEST_VERSION-arm.npk
-        
-        # Sign all packages
-        for file in ./all_packages/*.npk; do
-          python3 npk.py sign "$file" "$file"
-        done
-        
-        cp -f routeros-$LATEST_VERSION-arm.npk ./all_packages/
-        
-        # Create option package
-        if [ -f option.sfs ]; then
-          python3 npk.py create ./all_packages/gps-$LATEST_VERSION-arm.npk ./all_packages/option-$LATEST_VERSION-arm.npk option ./option.sfs -desc="busybox"
+        if [ -f mikrotik-${{ env.LATEST_VERSION }}.iso ]; then
+          echo "ISO created successfully: mikrotik-${{ env.LATEST_VERSION }}.iso"
+          ls -lh mikrotik-${{ env.LATEST_VERSION }}.iso
+        else
+          echo "ERROR: Failed to create ISO"
+          exit 1
         fi
         
-        # Create python3 package
-        if [ -f python3.sfs ]; then
-          python3 npk.py create ./all_packages/gps-$LATEST_VERSION-arm.npk ./all_packages/python3-$LATEST_VERSION-arm.npk python3 ./python3.sfs -desc="python 3.11.13"
-        fi
-        
-        # Create final zip
-        cd ./all_packages
-        zip -r ../all_packages-arm-$LATEST_VERSION.zip *.npk
-        cd ..
-        
-        echo "ARM packages patched successfully"
+        # Cleanup
+        sudo rm -rf ./efiboot ./new_iso
 
     - name: Prepare artifacts
-      if: steps.get_latest.outputs.has_new_version == 'true'
       run: |
-        mkdir -p ./artifacts/${{ env.LATEST_VERSION }}/${{ matrix.arch }}
+        mkdir -p ./output
         
-        # Copy all generated files
-        [ -f mikrotik-${{ env.LATEST_VERSION }}${{ env.ARCH }}.iso ] && cp mikrotik-${{ env.LATEST_VERSION }}${{ env.ARCH }}.iso ./artifacts/${{ env.LATEST_VERSION }}/${{ matrix.arch }}/ 2>/dev/null || true
-        [ -f all_packages-${{ matrix.arch }}-${{ env.LATEST_VERSION }}.zip ] && cp all_packages-${{ matrix.arch }}-${{ env.LATEST_VERSION }}.zip ./artifacts/${{ env.LATEST_VERSION }}/${{ matrix.arch }}/ 2>/dev/null || true
-        [ -f routeros-${{ env.LATEST_VERSION }}${{ env.ARCH }}.npk ] && cp routeros-${{ env.LATEST_VERSION }}${{ env.ARCH }}.npk ./artifacts/${{ env.LATEST_VERSION }}/${{ matrix.arch }}/ 2>/dev/null || true
-        [ -f CHANGELOG ] && cp CHANGELOG ./artifacts/${{ env.LATEST_VERSION }}/${{ matrix.arch }}/ 2>/dev/null || true
+        # Copy ISO
+        cp mikrotik-${{ env.LATEST_VERSION }}.iso ./output/
         
-        # Copy CHR files if they exist
-        ls chr-${{ env.LATEST_VERSION }}*.zip 2>/dev/null && cp chr-${{ env.LATEST_VERSION }}*.zip ./artifacts/${{ env.LATEST_VERSION }}/${{ matrix.arch }}/ 2>/dev/null || true
+        # Copy all_packages zip
+        cp all_packages-x86-${{ env.LATEST_VERSION }}.zip ./output/ 2>/dev/null || true
         
-        echo "Artifacts prepared for ${{ matrix.arch }}"
+        # Copy main NPK
+        cp routeros-${{ env.LATEST_VERSION }}.npk ./output/ 2>/dev/null || true
+        
+        # Copy CHANGELOG if exists
+        wget -q -O CHANGELOG https://${{ env.MIKRO_UPGRADE_URL }}/routeros/${{ env.LATEST_VERSION }}/CHANGELOG 2>/dev/null || true
+        [ -f CHANGELOG ] && cp CHANGELOG ./output/
+        
+        # Create version info
+        echo "RouterOS Version: ${{ env.LATEST_VERSION }}" > ./output/version.txt
+        echo "Build Time: $(date)" >> ./output/version.txt
+        echo "Architecture: x86" >> ./output/version.txt
+        
+        echo "Artifacts prepared in ./output/"
 
-    - name: Upload artifacts
-      if: steps.get_latest.outputs.has_new_version == 'true'
+    - name: Upload artifacts to GitHub
       uses: actions/upload-artifact@v4
       with:
-        name: mikrotik-patched-${{ env.LATEST_VERSION }}-${{ matrix.arch }}-${{ matrix.channel }}
-        path: ./artifacts/${{ env.LATEST_VERSION }}/${{ matrix.arch }}/
+        name: mikrotik-x86-${{ env.LATEST_VERSION }}
+        path: ./output/
         retention-days: 90
+        compression-level: 9
 
     - name: Create GitHub Release
-      if: steps.get_latest.outputs.has_new_version == 'true' && env.RELEASE == 'true'
+      if: github.event.inputs.release == 'true' || (github.event_name == 'schedule' && env.RELEASE != 'false')
       uses: softprops/action-gh-release@v2
       with:
-        name: "RouterOS ${{ env.LATEST_VERSION }} (${{ matrix.arch }} - ${{ matrix.channel }})"
+        name: "RouterOS ${{ env.LATEST_VERSION }} (x86)"
         body_path: "CHANGELOG"
-        tag_name: ${{ env.LATEST_VERSION }}-${{ matrix.arch }}-${{ matrix.channel }}
-        make_latest: ${{ matrix.channel == 'stable' && matrix.arch == 'x86' }}
-        prerelease: ${{ matrix.channel == 'testing' }}
+        tag_name: "v${{ env.LATEST_VERSION }}-x86"
+        make_latest: true
         files: |
-          mikrotik-${{ env.LATEST_VERSION }}${{ env.ARCH }}.iso
-          chr-${{ env.LATEST_VERSION }}*.zip
-          routeros-${{ env.LATEST_VERSION }}${{ env.ARCH }}.npk
-          all_packages-*-${{ env.LATEST_VERSION }}.zip
+          mikrotik-${{ env.LATEST_VERSION }}.iso
+          all_packages-x86-${{ env.LATEST_VERSION }}.zip
+          routeros-${{ env.LATEST_VERSION }}.npk
+
+    - name: Upload to SFTP (Optional)
+      if: github.event.inputs.release == 'true' && secrets.SSH_SERVER != ''
+      run: |
+        echo "Uploading to SFTP server..."
+        # Add your SFTP upload commands here if needed
+
+  Summary:
+    needs: Patch_x86_ISO
+    runs-on: ubuntu-22.04
+    if: always()
+    steps:
+      - name: Print summary
+        run: |
+          echo "========================================="
+          echo "Build completed for RouterOS x86"
+          echo "========================================="
+          echo "Artifacts saved in GitHub Actions"
+          echo "Download from: Actions -> Workflow Run -> Artifacts"
+          echo "========================================="
