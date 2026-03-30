@@ -21,14 +21,20 @@ jobs:
   Patch_And_Build:
     runs-on: ubuntu-22.04
     env:
+      # --- IMPORTANT: Fallback Keys to prevent ValueError ---
+      # Agar secrets khali hain toh ye 64-char hex keys use hongi (Dummy but mathematically valid)
       CUSTOM_LICENSE_PUBLIC_KEY: ${{ secrets.CUSTOM_LICENSE_PUBLIC_KEY || '102030405060708090a0b0c0d0e0f0102030405060708090a0b0c0d0e0f01020' }}
-      CUSTOM_LICENSE_PRIVATE_KEY: ${{ secrets.CUSTOM_LICENSE_PRIVATE_KEY }}
+      CUSTOM_LICENSE_PRIVATE_KEY: ${{ secrets.CUSTOM_LICENSE_PRIVATE_KEY || '0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20' }}
+      
       CUSTOM_NPK_SIGN_PUBLIC_KEY: ${{ secrets.CUSTOM_NPK_SIGN_PUBLIC_KEY || 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2' }}
-      CUSTOM_NPK_SIGN_PRIVATE_KEY: ${{ secrets.CUSTOM_NPK_SIGN_PRIVATE_KEY }}
+      CUSTOM_NPK_SIGN_PRIVATE_KEY: ${{ secrets.CUSTOM_NPK_SIGN_PRIVATE_KEY || '201f1e1d1c1b1a191817161514131211100f0e0d0c0b0a090807060504030201' }}
+      
       CUSTOM_CLOUD_PUBLIC_KEY: ${{ secrets.CUSTOM_CLOUD_PUBLIC_KEY || 'f1e2d3c4b5a6f1e2d3c4b5a6f1e2d3c4b5a6f1e2d3c4b5a6f1e2d3c4b5a6f1e2' }}
-      MIKRO_LICENSE_PUBLIC_KEY: ${{ secrets.MIKRO_LICENSE_PUBLIC_KEY || '4a595133644d6736523959326e5535354d6d4a4d6b6e4d50516b32693836374a' }}
-      MIKRO_NPK_SIGN_PUBLIC_KEY: ${{ secrets.MIKRO_NPK_SIGN_PUBLIC_KEY || 'c33b9347898862f18390885141e6b3531b402868c78c3c4343166443685e1327' }}
-      MIKRO_CLOUD_PUBLIC_KEY: ${{ secrets.MIKRO_CLOUD_PUBLIC_KEY || '68c78c3c4343166443685e1327c33b9347898862f18390885141e6b3531b4028' }}
+
+      # MikroTik Original Keys
+      MIKRO_LICENSE_PUBLIC_KEY: '4a595133644d6736523959326e5535354d6d4a4d6b6e4d50516b32693836374a'
+      MIKRO_NPK_SIGN_PUBLIC_KEY: 'c33b9347898862f18390885141e6b3531b402868c78c3c4343166443685e1327'
+      MIKRO_CLOUD_PUBLIC_KEY: '68c78c3c4343166443685e1327c33b9347898862f18390885141e6b3531b4028'
 
     steps:
     - name: Checkout
@@ -90,11 +96,23 @@ jobs:
     - name: Sign NPKs
       run: |
         sudo chown -R $USER:$USER ./pkgs_dir
+        # Template package dhonden
         TEMPLATE=$(find ./pkgs_dir -name "gps-*.npk" | head -n 1)
+        
+        # 1. Option NPK create karen
         sudo -E python3 npk.py create "$TEMPLATE" ./pkgs_dir/option-$VERSION.npk option ./option.sfs -desc="Patched Tools"
+        
+        # 2. RouterOS NPK patch karen
         MAIN_NPK="./pkgs_dir/routeros-$VERSION-${{ github.event.inputs.arch }}.npk"
-        if [ -f "$MAIN_NPK" ]; then sudo -E python3 patch.py npk "$MAIN_NPK"; fi
-        for f in ./pkgs_dir/*.npk; do sudo -E python3 npk.py sign "$f" "$f"; done
+        if [ -f "$MAIN_NPK" ]; then
+           sudo -E python3 patch.py npk "$MAIN_NPK"
+        fi
+
+        # 3. Saare NPKs sign karen (Sudo -E keys pass karne ke liye)
+        for f in ./pkgs_dir/*.npk; do
+          echo "Signing $f ..."
+          sudo -E python3 npk.py sign "$f" "$f"
+        done
 
     - name: Rebuild ISO
       run: |
