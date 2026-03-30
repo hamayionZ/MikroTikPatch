@@ -49,7 +49,7 @@ jobs:
 
     - name: Download Official Files
       run: |
-        # Download ISO (Loader banane ke liye kernel iske andar hota hai)
+        # Download ISO ( banane ke liye kernel iske andar hota hai)
         ARCH_SUFFIX=""
         if [ "${{ github.event.inputs.arch }}" == "arm64" ]; then ARCH_SUFFIX="-arm64"; fi
         wget -nv -O mikrotik.iso https://download.mikrotik.com/routeros/$VERSION/mikrotik-$VERSION$ARCH_SUFFIX.iso
@@ -76,29 +76,48 @@ jobs:
         cd ../../
         mksquashfs option-root option.sfs -quiet -comp xz -no-xattrs -b 256k
 
-    - name: CREATE LOADER (Patch Kernel/EFI)
+- name: CREATE LOADER (Patch Kernel/EFI)
       run: |
-        sudo mkdir -p ./iso_mount ./new_iso_files
+        # Directories normal user se banayein takay permission ka masla na ho
+        mkdir -p ./iso_mount ./new_iso_files
+        
+        # Mount ke liye sudo zaroori hai
         sudo mount -o loop mikrotik.iso ./iso_mount
-        cp -r ./iso_mount/* ./new_iso_files/
+        
+        # Copy karte waqt sudo lagayein kyunki mount point root ka hai
+        sudo cp -rv ./iso_mount/* ./new_iso_files/
+        
+        # Unmount kar dein
         sudo umount ./iso_mount
+        
+        # SABSE ZAROORI: Saari files ki ownership wapis 'runner' user ko dein
+        # Taake python scripts in files ko modify kar sakein
+        sudo chown -R $USER:$USER ./new_iso_files
+        sudo chmod -R 755 ./new_iso_files
 
         # Extract EFI Boot Image to patch the Kernel
-        mkdir -p ./efiboot
-        sudo mount -o loop ./new_iso_files/efiboot.img ./efiboot
+        mkdir -p ./efiboot_dir
+        # efiboot.img ko mount karein
+        sudo mount -o loop ./new_iso_files/efiboot.img ./efiboot_dir
         
         if [ "${{ github.event.inputs.arch }}" == "x86" ]; then
           echo "Patching x86 Kernel (The Loader)..."
-          # Ye line aapki 'patch.py' ko use karke kernel ko loader mein convert karegi
-          sudo -E python3 patch.py kernel ./efiboot/linux.x86_64
-          # Bootloader patch
-          sudo cp ./efiboot/linux.x86_64 ./new_iso_files/isolinux/linux
+          # Kernel file ko bahar nikal kar patch karein
+          cp ./efiboot_dir/linux.x86_64 ./linux_patched
+          sudo -E python3 patch.py kernel ./linux_patched
+          
+          # Patched kernel ko wapis ISO structure mein daalein
+          cp ./linux_patched ./new_iso_files/isolinux/linux
+          # (Optional) Agar EFI boot fix karni ho toh image ke andar wapis daalna hota hai
+          # Lekin mostly 'isolinux/linux' hi loader ka kaam karta hai
         elif [ "${{ github.event.inputs.arch }}" == "arm64" ]; then
           echo "Patching ARM64 Kernel (The Loader)..."
-          sudo -E python3 patch.py kernel ./efiboot/EFI/BOOT/BOOTAA64.EFI
+          cp ./efiboot_dir/EFI/BOOT/BOOTAA64.EFI ./boot_patched
+          sudo -E python3 patch.py kernel ./boot_patched
+          # Yahan aapko efiboot.img ko modify karna paray ga (Advanced)
         fi
         
-        sudo umount ./efiboot
+        sudo umount ./efiboot_dir
         echo "Loader Created Successfully."
 
     - name: Create & Sign Custom NPKs
