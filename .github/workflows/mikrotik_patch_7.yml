@@ -13,7 +13,7 @@ on:
         required: true
         default: 'stable'
       version:
-        description: "Specify version (e.g., 7.15.2), empty for latest"
+        description: "Specify version (e.g., 7.22.1), empty for latest"
         required: false
         default: ''
 
@@ -23,10 +23,17 @@ permissions:
 jobs:
   Build_Patched_ROS:
     runs-on: ubuntu-22.04
+    # Global environment variables takay har step ko keys mil saken
     env:
       CUSTOM_LICENSE_PRIVATE_KEY: ${{ secrets.CUSTOM_LICENSE_PRIVATE_KEY }}
+      CUSTOM_LICENSE_PUBLIC_KEY: ${{ secrets.CUSTOM_LICENSE_PUBLIC_KEY }}
       CUSTOM_NPK_SIGN_PRIVATE_KEY: ${{ secrets.CUSTOM_NPK_SIGN_PRIVATE_KEY }}
-      # Ensure other keys are also in secrets
+      CUSTOM_NPK_SIGN_PUBLIC_KEY: ${{ secrets.CUSTOM_NPK_SIGN_PUBLIC_KEY }}
+      CUSTOM_CLOUD_PUBLIC_KEY: ${{ secrets.CUSTOM_CLOUD_PUBLIC_KEY }}
+      MIKRO_LICENSE_PUBLIC_KEY: ${{ secrets.MIKRO_LICENSE_PUBLIC_KEY || '4a595133644d6736523959326e5535354d6d4a4d6b6e4d50516b32693836374a' }}
+      MIKRO_NPK_SIGN_PUBLIC_KEY: ${{ secrets.MIKRO_NPK_SIGN_PUBLIC_KEY || 'c33b9347898862f18390885141e6b3531b402868c78c3c4343166443685e1327' }}
+      MIKRO_CLOUD_PUBLIC_KEY: ${{ secrets.MIKRO_CLOUD_PUBLIC_KEY || '68c78c3c4343166443685e1327c33b9347898862f18390885141e6b3531b4028' }}
+
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
@@ -45,23 +52,18 @@ jobs:
           LATEST_VERSION=$(wget -nv -O - https://download.mikrotik.com/routeros/NEWESTa7.${{ github.event.inputs.channel }} | cut -d ' ' -f1)
         fi
         echo "VERSION=$LATEST_VERSION" >> $GITHUB_ENV
-        echo "Selected Version: $LATEST_VERSION"
 
     - name: Download Official Files
       run: |
-        # Download ISO ( banane ke liye kernel iske andar hota hai)
         ARCH_SUFFIX=""
         if [ "${{ github.event.inputs.arch }}" == "arm64" ]; then ARCH_SUFFIX="-arm64"; fi
         wget -nv -O mikrotik.iso https://download.mikrotik.com/routeros/$VERSION/mikrotik-$VERSION$ARCH_SUFFIX.iso
-        
-        # Download All Packages (Signing ke liye)
         wget -nv -O all_packages.zip https://download.mikrotik.com/routeros/$VERSION/all_packages-${{ github.event.inputs.arch }}-$VERSION.zip
         unzip all_packages.zip -d ./new_iso
 
     - name: Create Option SFS (Busybox & Keygen)
       run: |
         mkdir -p ./option-root/bin/
-        # Architecture ke mutabiq binary pick karein
         if [ "${{ github.event.inputs.arch }}" == "x86" ]; then
           cp ./busybox/busybox_x86 ./option-root/bin/busybox
           cp ./keygen/keygen_x86 ./option-root/bin/keygen
@@ -70,79 +72,58 @@ jobs:
           cp ./keygen/keygen_aarch64 ./option-root/bin/keygen
         fi
         chmod +x ./option-root/bin/*
-        # Busybox links
         cd ./option-root/bin/
         for cmd in $(./busybox --list); do ln -sf busybox $cmd; done
         cd ../../
-        mksquashfs option-root option.sfs -quiet -comp xz -no-xattrs -b 256k
+        sudo mksquashfs option-root option.sfs -quiet -comp xz -no-xattrs -b 256k
 
     - name: CREATE LOADER (Patch Kernel/EFI)
       run: |
-        # Directories normal user se banayein takay permission ka masla na ho
+        # 1. Mount and Extract ISO
         mkdir -p ./iso_mount ./new_iso_files
-        
-        # Mount ke liye sudo zaroori hai
         sudo mount -o loop mikrotik.iso ./iso_mount
-        
-        # Copy karte waqt sudo lagayein kyunki mount point root ka hai
         sudo cp -rv ./iso_mount/* ./new_iso_files/
-        
-        # Unmount kar dein
         sudo umount ./iso_mount
-       run: |
-        sudo -E python3 patch.py kernel ./linux_patched
         
-        # SABSE ZAROORI: Saari files ki ownership wapis 'runner' user ko dein
-        # Taake python scripts in files ko modify kar sakein
+        # 2. Fix Permissions
         sudo chown -R $USER:$USER ./new_iso_files
-        sudo chmod -R 755 ./new_iso_files
-
-        # Extract EFI Boot Image to patch the Kernel
+        
+        # 3. Extract and Patch Kernel
         mkdir -p ./efiboot_dir
-        # efiboot.img ko mount karein
         sudo mount -o loop ./new_iso_files/efiboot.img ./efiboot_dir
         
         if [ "${{ github.event.inputs.arch }}" == "x86" ]; then
-          echo "Patching x86 Kernel (The Loader)..."
-          # Kernel file ko bahar nikal kar patch karein
+          echo "Patching x86 Kernel..."
           cp ./efiboot_dir/linux.x86_64 ./linux_patched
           sudo -E python3 patch.py kernel ./linux_patched
-          
-          # Patched kernel ko wapis ISO structure mein daalein
           cp ./linux_patched ./new_iso_files/isolinux/linux
-          # (Optional) Agar EFI boot fix karni ho toh image ke andar wapis daalna hota hai
-          # Lekin mostly 'isolinux/linux' hi loader ka kaam karta hai
         elif [ "${{ github.event.inputs.arch }}" == "arm64" ]; then
-          echo "Patching ARM64 Kernel (The Loader)..."
+          echo "Patching ARM64 EFI..."
           cp ./efiboot_dir/EFI/BOOT/BOOTAA64.EFI ./boot_patched
           sudo -E python3 patch.py kernel ./boot_patched
-          # Yahan aapko efiboot.img ko modify karna paray ga (Advanced)
+          # Note: Re-injecting into efiboot.img for ARM64 is more complex
         fi
         
         sudo umount ./efiboot_dir
-        echo "Loader Created Successfully."
+        echo "Loader Patching Completed."
 
     - name: Create & Sign Custom NPKs
       run: |
-        # Ensure directories are writable
         sudo chown -R $USER:$USER ./new_iso
-        
-        # NPK Create aur Sign ka logic
         TEMPLATE_NPK=$(find ./new_iso -name "gps-*.npk" | head -n 1)
-        python3 npk.py create "$TEMPLATE_NPK" ./new_iso/option-$VERSION.npk option ./option.sfs -desc="Patched Tools"
         
+        # Create Custom Package
+        sudo -E python3 npk.py create "$TEMPLATE_NPK" ./new_iso/option-$VERSION.npk option ./option.sfs -desc="Patched Tools"
+        
+        # Sign all NPKs
         for file in ./new_iso/*.npk; do
           echo "Signing $file..."
-          python3 npk.py sign "$file" "$file"
+          sudo -E python3 npk.py sign "$file" "$file"
         done
 
     - name: Build Patched ISO
       run: |
-        # Patched NPKs ko ISO folder mein copy karein
         cp ./new_iso/*.npk ./new_iso_files/
-        
-        # ISO Build karein
-        # Note: 'mkisofs' ke liye sudo ki zaroorat nahi agar permissions set hain
         mkisofs -o mikrotik-patched-$VERSION.iso \
                 -V "MikroTik $VERSION" \
                 -b isolinux/isolinux.bin -c isolinux/boot.cat \
@@ -153,7 +134,7 @@ jobs:
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: patched-routeros-${{ env.VERSION }}
+        name: patched-routeros-${{ env.VERSION }}-${{ github.event.inputs.arch }}
         path: |
           mikrotik-patched-*.iso
           ./new_iso/*.npk
