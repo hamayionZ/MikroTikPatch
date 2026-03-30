@@ -76,7 +76,7 @@ jobs:
         cd ../../
         mksquashfs option-root option.sfs -quiet -comp xz -no-xattrs -b 256k
 
-- name: CREATE LOADER (Patch Kernel/EFI)
+    - name: CREATE LOADER (Patch Kernel/EFI)
       run: |
         # Directories normal user se banayein takay permission ka masla na ho
         mkdir -p ./iso_mount ./new_iso_files
@@ -122,23 +122,25 @@ jobs:
 
     - name: Create & Sign Custom NPKs
       run: |
-        # Create 'option' package using your npk.py
-        # gps-VERSION.npk ko as a template use karein
-        TEMPLATE_NPK=$(find ./new_iso -name "gps-*.npk" | head -n 1)
-        sudo -E python3 npk.py create "$TEMPLATE_NPK" ./new_iso/option-$VERSION.npk option ./option.sfs -desc="Patched Tools"
+        # Ensure directories are writable
+        sudo chown -R $USER:$USER ./new_iso
         
-        # Sign all NPKs in the folder with your custom key
+        # NPK Create aur Sign ka logic
+        TEMPLATE_NPK=$(find ./new_iso -name "gps-*.npk" | head -n 1)
+        python3 npk.py create "$TEMPLATE_NPK" ./new_iso/option-$VERSION.npk option ./option.sfs -desc="Patched Tools"
+        
         for file in ./new_iso/*.npk; do
           echo "Signing $file..."
-          sudo -E python3 npk.py sign "$file" "$file"
+          python3 npk.py sign "$file" "$file"
         done
 
     - name: Build Patched ISO
       run: |
-        # Copy patched NPKs into the ISO structure
+        # Patched NPKs ko ISO folder mein copy karein
         cp ./new_iso/*.npk ./new_iso_files/
         
-        # Rebuild the final ISO
+        # ISO Build karein
+        # Note: 'mkisofs' ke liye sudo ki zaroorat nahi agar permissions set hain
         mkisofs -o mikrotik-patched-$VERSION.iso \
                 -V "MikroTik $VERSION" \
                 -b isolinux/isolinux.bin -c isolinux/boot.cat \
